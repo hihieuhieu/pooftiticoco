@@ -2,6 +2,16 @@
 #include "time.h"
 #include <Async_Operations.h> //! think of necessity of async stuff
 
+/*
+async might become necessary if this code explodes by:
+- FIR filter
+- (FFT)
+- Calculating power in frequency regions
+- all the actoric stuff
+
+and by this, the sampling rate would be decreased
+*/
+
 int analogInputPin = A0;
 int digitalInputPin = 2;
 
@@ -21,7 +31,7 @@ void loop() {
 
   Serial.print(measured_value, 4);
   
-  Serial.print("   ");
-  Serial.println((1/float(micros() - start_time))*1e6,10);
+  Serial.print("~");
+  Serial.println((1/float(micros() - start_time))*1e6,2);
   
 }
