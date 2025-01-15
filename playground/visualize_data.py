@@ -1,50 +1,158 @@
+from __future__ import print_function
+from __future__ import division
+import numpy as np
 import serial
 import matplotlib.pyplot as plt
-import matplotlib.animation as animation
+import time
 from collections import deque
-import numpy as np
 from scipy.signal import medfilt
+from scipy.signal import butter, filtfilt 
+import scipy.integrate as integrate
 
+def butter_lowpass(cutoff, fs, order=4):
+    nyquist = 0.5 * fs
+    normal_cutoff = cutoff / nyquist
+    b, a = butter(order, normal_cutoff, btype='low', analog=False)
+    return b, a
 
-port = '/dev/ttyACM0'
+def lowpass_filter(data, cutoff=2.0, fs=50.0, order=4):
+    """Applies a low-pass filter to the data."""
+    b, a = butter_lowpass(cutoff, fs, order)
+    return filtfilt(b, a, data)
+
+def butter_bandpass(lowcut, highcut, fs, order=4):
+    nyquist = 0.5 * fs
+    low = lowcut / nyquist
+    high = highcut / nyquist
+    b, a = butter(order, [low, high], btype='band', analog=False)
+    return b, a
+
+def bandpass_filter(data, lowcut=1.0, highcut=10.0, fs=50.0, order=4):
+    """Applies a bandpass filter to the data."""
+    b, a = butter_bandpass(lowcut, highcut, fs, order)
+    return filtfilt(b, a, data)
+
+def signal_energy(signal, buffer_length):
+    energy = integrate.quad(signal, 0, buffer_length)
+    return energy
+
+port = '/dev/ttyACM0' 
 baud_rate = 115200
-max_data_points = 1000
 
-ser = serial.Serial(port, baud_rate)
+data_storage = []  
+in_data_frame = False
+# data_storage = []
+data_buffer_size = 2000
+data_buffer = deque([0] * data_buffer_size, maxlen=data_buffer_size)  
 
-sensor_data = deque([0] * max_data_points, maxlen=max_data_points)
-sampling_frequency = deque([0] * max_data_points, maxlen=max_data_points)
+ser = serial.Serial(port, baud_rate, timeout=1)
+time.sleep(2)  
 
-fig, ax1 = plt.subplots()
+plt.ion() 
+fig, ax = plt.subplots()
+unfiltered_plot, = ax.plot([], [], 'b', alpha=0.2, label='unfiltered')  # Initial empty plot
+lowpass_filtered_plot, = ax.plot([], [], 'r', label='Lowpass: fC = 300Hz')
+# bandpass_filtered_plot, = ax.plot([], [], 'g', label='Bandpass: fC = 300, 1500 Hz')
+ax.set_xlabel('Sample Number')
+ax.set_ylabel('Data Value')
+ax.set_title('Real-Time Data Plot')
+ax.legend(loc='upper right')
 
-sensor_data_line, = ax1.plot(sensor_data, label='Sensor Data')
-ax1.set_ylim(0, 5)
-ax1.set_ylabel('Sensor Data (V)')
-ax1.set_xlabel('Time')
-ax1.grid(True)
+try:
+    while True:
+        if ser.in_waiting > 0:
+            serial_read = ser.readline()
 
-text_display = ax1.text(0.7, 0.9, '', transform=ax1.transAxes)
+            try:
+                line = serial_read.decode('utf-8').strip()
+            except UnicodeDecodeError:
+                print(f"Received invalid data: {serial_read}")
+                continue
 
-def update(frame):
-    try:
-        values = (ser.readline().decode('utf-8').strip()).split('~')
+            if in_data_frame and line != 'stop':
+                try:
+                    data_storage.append(float(line))
+                except ValueError:
+                    print(f"Non-numeric data received: {line}")
+                    continue
 
-        sensor_data.append(float(values[0]))
-        sampling_frequency.append(float(values[1]))
-        sensor_data_median_filtered = medfilt(sensor_data, kernel_size=5)
-        sensor_data_line.set_ydata(sensor_data_median_filtered)
-        text_display.set_text(f'fS [Hz]: {round(np.average(sampling_frequency),2)}')
-        ax1.set_ylim(min(sensor_data_median_filtered) - 0.1, 
-                        max(sensor_data_median_filtered) + 0.1)
+            if line == 'start':
+                in_data_frame = True
+            elif line == 'stop':
+                in_data_frame = False
 
-    except Exception as e:
-        print(f"Error: {e}")
+                if data_storage:
+                    data_buffer.extend(medfilt(data_storage))  
 
-    return sensor_data_line, text_display
+                    lowpass_filtered_buffer = lowpass_filter(list(data_buffer), cutoff=300, fs=8800, order=4)
+                    bandpass_filtered_buffer = bandpass_filter(list(data_buffer), lowcut=300, highcut=1500, fs=8800, order=4)
 
-ani = animation.FuncAnimation(fig, update, interval=1, blit=True, cache_frame_data=False)
+                    unfiltered_plot.set_xdata(range(len(data_buffer)))
+                    unfiltered_plot.set_ydata(data_buffer)
 
-plt.legend()
-plt.show()
+                    lowpass_filtered_plot.set_xdata(range(len(lowpass_filtered_buffer)))
+                    lowpass_filtered_plot.set_ydata(lowpass_filtered_buffer)
 
-ser.close()
+                    # bandpass_filtered_plot.set_xdata(range(len(bandpass_filtered_buffer)))
+                    # bandpass_filtered_plot.set_ydata(bandpass_filtered_buffer)
+
+                    # current_signal_energy = signal_energy(data_buffer, len(data_buffer))
+
+                    # print(f'Signal energy: {current_signal_energy}')
+
+                    ax.relim()  
+                    ax.autoscale_view(True, True, True)  
+                    plt.draw()
+                    plt.pause(0.01)
+                
+                data_storage = []
+
+            elif 'Sample frequency' in line:
+                frequency = float(line.split(":")[1].strip())
+                print(f'fS: {frequency}')
+
+except KeyboardInterrupt:
+    print("\nProgram terminated by user.")
+
+finally:
+    if ser.is_open:
+        ser.close()
+    plt.ioff()
+    plt.show() 
+    print("Serial port closed.")
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+# # Continuously read and print data
+# while True:
+#     if ser.in_waiting > 0:
+#         serial_read = ser.readline()
+
+#         try:
+#             line = serial_read.decode('utf-8').strip()
+#         except UnicodeDecodeError:
+#             print(f"Received invalid data: {line}")
+#             continue
+        
+#         if in_data_frame == True and line != 'stop':
+#             data_storage.append(float(line))
+
+#         if line == 'start':
+#             in_data_frame = True
+#         elif line == 'stop':
+#             in_data_frame = False
+#             data_storage = []
+
+
+

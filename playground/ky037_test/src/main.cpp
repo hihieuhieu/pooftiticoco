@@ -14,6 +14,13 @@ and by this, the sampling rate would be decreased
 
 int analogInputPin = A0;
 int digitalInputPin = 2;
+int sample_frequency = 2e3;
+int sample_time = (1 / sample_frequency) * 1e6;
+
+const int number_of_samples = 50; 
+//! caution: if this number is too high, the arduino doesn't provide enough allocation storage
+
+int sample_data[number_of_samples];
 
 void setup() {
   pinMode(analogInputPin, INPUT);
@@ -23,15 +30,35 @@ void setup() {
 }
 
 void loop() {
-  float measured_value;
+  unsigned long loop_start = micros();
+  for (int i = 0; i < number_of_samples; i++)
+  {
+    sample_data[i] = analogRead(analogInputPin);
+    // delayMicroseconds(sample_time);
+    // delayMicroseconds(1); 
+  }
 
-  unsigned long start_time = micros();
+  float loop_duration = (micros() - loop_start) / 1e6;
 
-  measured_value = analogRead(analogInputPin) * (5.0/1023.0);
+  // Serial.print("Loop duration: ");
+  // Serial.println(loop_duration);
+  // Serial.print("Buffer size: ");
+  // Serial.println(number_of_samples);
+  Serial.print("Sample frequency: ");
+  Serial.println(number_of_samples / loop_duration);
 
-  Serial.print(measured_value, 4);
+  Serial.println("start");
+
+  // // Print data over Serial for DSP on laptop
+  for (int i = 0; i < number_of_samples; i++)
+  {
+    Serial.println(sample_data[i] * (5.0/1023.0), 4);
+
+  }
   
-  Serial.print("~");
-  Serial.println((1/float(micros() - start_time))*1e6,2);
+  Serial.println("stop");
   
+  // Serial.print("Loop duration [s]: ");
+  // Serial.println((micros() - loop_start)/1e6,6);
 }
+
