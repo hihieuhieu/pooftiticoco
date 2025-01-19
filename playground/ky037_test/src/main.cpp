@@ -1,6 +1,6 @@
 #include <Arduino.h>
 #include "time.h"
-#include <Async_Operations.h> //! think of necessity of async stuff
+// #include <Async_Operations.h> //! think of necessity of async stuff
 
 /*
 async might become necessary if this code explodes by:
@@ -34,16 +34,10 @@ void loop() {
   for (int i = 0; i < number_of_samples; i++)
   {
     sample_data[i] = analogRead(analogInputPin);
-    // delayMicroseconds(sample_time);
-    // delayMicroseconds(1); 
   }
 
   float loop_duration = (micros() - loop_start) / 1e6;
 
-  // Serial.print("Loop duration: ");
-  // Serial.println(loop_duration);
-  // Serial.print("Buffer size: ");
-  // Serial.println(number_of_samples);
   Serial.print("Sample frequency: ");
   Serial.println(number_of_samples / loop_duration);
 
@@ -61,4 +55,3 @@ void loop() {
   // Serial.print("Loop duration [s]: ");
   // Serial.println((micros() - loop_start)/1e6,6);
 }
-
