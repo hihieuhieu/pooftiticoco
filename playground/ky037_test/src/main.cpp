@@ -4,7 +4,48 @@
 int analogInputPin = A0;
 int digitalInputPin = 2;
 
-template <int order> // order is 1 or 2
+int digitalOutputTransistorGate = 8;
+int digitalOutputTransistorDrain = 9;
+
+//* number of samples to take for one filtering
+const int n_acquisition_samples = 100; 
+// for n=100, this takes approx 11.21ms (acquisition) + 13.3ms (filtering) = 24.51ms
+//! caution: if this number is too high, the arduino doesn't provide enough allocation storage
+
+//* number of samples for reacquisition for consecutive energy calculation
+const int n_fifo_samples = 300; 
+//for n=500, this takes approx 3*24.51ms = 73.53ms 
+
+const int n_integration_samples = 1000;
+// for n=500, this takes approx 10*24.51ms = 245.1ms
+
+int n_currently_acquired_samples = 0;
+
+float sample_frequency = 8840.;
+float cut_off_frequency = 200.;
+
+float sample_duration = 1 / sample_frequency;
+
+//* max beats per minute to record
+float bpm = 160.; 
+//* adjust this according to whatever you think a beat duration is
+float beat_duration = 350 * 1e-3; 
+float beat_frequency = bpm / 60; 
+
+float led_threshold = 1.5;
+
+int beat_duration_samples = int( beat_duration / sample_duration );
+
+// sum of processed signal of length number_of_samples
+float sum_filtered_instantaneous_signal = 0.;
+// sum of processed signal of length integration_samples
+float sum_integrated_signal = 0.;
+// sum of fifo_samples for new acquisition
+float sum_fifo_signal_new = 0.;
+// sum of fifo_samples of previous samples
+float sum_fifo_signal_old = 0.;
+
+template <int order> //* order is 1 or 2
 class LowPass
 {
   private:
@@ -85,58 +126,34 @@ class LowPass
     }
 };
 
-float* abs_normalized_signal(float data[], const int size) {
+
+float abs_normalized_instantaneous_signal(float data[], const int size) {
+  /*
+  Given a time sampled signal s[n] with mean value s0, this function
+  computes |s[n]-s0| as a metric for the power within an audio signal. 
+  */
   float* result = new float[size];
 
-  float sum = 0.0;
-  for (int i = 0; i < size; i++) {sum += data[i];}
-  float mean = sum / size; //Calculate mean value of the signal
+  // for calculating signal mean
+  float input_signal_sum = 0.0;
 
-  for (int i = 0; i < size; i++) {result[i] = abs(data[i] - mean);}
+  // for calculating signal frame energy
+  float processes_signal_sum = 0.0;
 
-  return result;
-}
+  for (int i = 0; i < size; i++) {input_signal_sum += data[i];}
+  
+  //* Calculate mean value s0 of the signal
+  float mean = input_signal_sum / size; 
 
-const int number_of_samples = 100; 
-//! caution: if this number is too high, the arduino doesn't provide enough allocation storage
-
-float sample_data[number_of_samples];
-float filtered_data[number_of_samples];
-float abs_offset_signal[number_of_samples];
-
-// Filter instance
-LowPass<2> lp(200,8840,false);
-
-void setup() {
-  pinMode(analogInputPin, INPUT);
-  pinMode(digitalInputPin, INPUT);
-  Serial.begin(115200);
-  Serial.println("Initialized");
-}
-
-void loop() {
-  unsigned long loop_start = micros();
-  for (int i = 0; i < number_of_samples; i++)
-  {
-    sample_data[i] = analogRead(analogInputPin);
+  for (int i = 0; i < size; i++) {
+    // calculate absolute mean-free signal
+    result[i] = abs(data[i] - mean);
+    // calculate total signal frame energy
+    processes_signal_sum += result[i];
   }
 
-  float loop_duration = (micros() - loop_start) / 1e6;
-
-  // Serial.print("Sample frequency: ");
-  // Serial.println(number_of_samples / loop_duration);
-
-  unsigned long processing_duration_start = micros();
-
-  for (int i = 0; i < number_of_samples; i++)
-  {
-    sample_data[i] *= (5.0/1023.0);
-    filtered_data[i] = lp.filt(sample_data[i]);    
-  }
-
-  float* abs_offset_signal = abs_normalized_signal(filtered_data, number_of_samples);
-
-  for (int i = 0; i < number_of_samples; i++)
+  //! for visualization purposes only:
+  for (int i = 0; i < n_acquisition_samples; i++)
   {
     // Serial.print(">raw:");
     // Serial.println(sample_data[i], 4);
@@ -144,14 +161,101 @@ void loop() {
     // Serial.print(">filtered:");
     // Serial.println(filtered_data[i]);
 
-    Serial.print(">abs_offset:");
-    Serial.println(abs_offset_signal[i]);
+    // Serial.print(">abs_offset:");
+    // Serial.println(result[i]);
+  }
+  //!
+
+  delete[] result;
+
+  return processes_signal_sum;
+}
+
+
+float sample_data[n_acquisition_samples];
+float filtered_data[n_acquisition_samples];
+float abs_offset_signal[n_acquisition_samples];
+
+//* Filter instance
+//* cutoff: 200Hz, fS: 8840Hz (measured via loop function)
+//* --> each sample takes 113.122 µs
+LowPass<2> lp(cut_off_frequency,sample_frequency,false);
+
+void setup() {
+  pinMode(analogInputPin, INPUT);
+  pinMode(digitalInputPin, INPUT);
+  pinMode(digitalOutputTransistorGate, OUTPUT);
+  pinMode(digitalOutputTransistorDrain, OUTPUT);
+  Serial.begin(115200);
+  Serial.println("Initialized");
+  digitalWrite(digitalOutputTransistorDrain, HIGH);
+  digitalWrite(digitalOutputTransistorGate, HIGH);
+
+  int i = 0;
+  while ( i <= n_integration_samples ){
+    // fill up the buffer initially
+    for (int i = 0; i < n_acquisition_samples; i++)
+    {
+      sample_data[i] = analogRead(analogInputPin);
+    }
+
+    for (int i = 0; i < n_acquisition_samples; i++)
+    {
+      sample_data[i] *= (5.0/1023.0);
+      filtered_data[i] = lp.filt(sample_data[i]);    
+    }
+    //* mean-free abs sum
+    sum_integrated_signal += abs_normalized_instantaneous_signal(filtered_data, n_acquisition_samples);
+    i += n_acquisition_samples;
   }
 
-  delete[] abs_offset_signal;
+}
+
+void loop() {
+  // double loop_start = micros();
+
+  //* Record <number_of_samples> samples, which are to be processed
+  for (int i = 0; i < n_acquisition_samples; i++)
+  {
+    sample_data[i] = analogRead(analogInputPin);
+  }
+
+  //* loop_duration to calculate sample frequency fS
+  // double loop_duration = (micros() - loop_start) / 1e6;
+  // Serial.print("loop_duration: ");
+  // Serial.println(loop_duration*1e3, 6);
+  // Serial.print("Sample frequency: ");
+  // Serial.println(number_of_samples / loop_duration);
+  // unsigned long processing_duration_start = micros();
+
+  //* Lowpass filter data
+  for (int i = 0; i < n_acquisition_samples; i++)
+  {
+    sample_data[i] *= (5.0/1023.0);
+    filtered_data[i] = lp.filt(sample_data[i]);    
+  }
+  //* mean-free abs sum
+  sum_filtered_instantaneous_signal = abs_normalized_instantaneous_signal(filtered_data, n_acquisition_samples);
+
+  sum_fifo_signal_new += sum_filtered_instantaneous_signal;
+  n_currently_acquired_samples += n_acquisition_samples;
+
+  if (n_currently_acquired_samples >= n_fifo_samples){
+    sum_integrated_signal = sum_integrated_signal + sum_fifo_signal_new - sum_fifo_signal_old;
+    n_currently_acquired_samples = 0;
+
+    if (sum_integrated_signal >= led_threshold){
+      digitalWrite(digitalOutputTransistorGate, HIGH);
+    } else {digitalWrite(digitalOutputTransistorGate, LOW);}
+
+    sum_fifo_signal_old = sum_fifo_signal_new;
+    sum_integrated_signal = 0;
+
+    // Serial.print(">sum filtered signal:");
+    // Serial.println(sum_integrated_signal); 
+  }
   
-  
-  Serial.print("Processing duration [s]: ");
-  Serial.println((micros() - processing_duration_start)/1e6,6);
+  // Serial.print("Processing duration [s]: ");
+  // Serial.println((micros() - processing_duration_start)/1e6,6);
 }
 
