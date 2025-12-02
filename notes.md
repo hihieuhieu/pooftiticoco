@@ -1,4 +1,8 @@
 # Some notes
+https://arduinomodules.info/ky-037-high-sensitivity-sound-detection-module/
+https://www.infineon.com/assets/row/public/documents/24/49/infineon-irlz44n-datasheet-en.pdf
+
+
 
 ## Microphone sensor KY-037
 
